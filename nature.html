@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <link rel="icon" href="data:,">
+    <title>自然元素探索之旅 - 3D幼儿互动识字</title>
+    <link rel="stylesheet" href="app.css">
+</head>
+<body>
+
+    <!-- 部署资源缺失自检横幅（默认隐藏，libs/ 等未上线时显示具体缺失文件） -->
+    <div id="deploy-warning" role="alert"></div>
+
+    <!-- 加载画面 -->
+    <div class="loading-screen" id="loadingScreen">
+        <div class="loading-spinner"></div>
+        <div class="loading-text">正在准备探索之旅...</div>
+    </div>
+
+    <!-- 兜底：即使 CDN/脚本加载缓慢或被网络阻塞，最多 3 秒后强制隐藏加载页，
+         避免手机/平板卡在“正在加载中”并拦截所有点击（独立于后续阻塞脚本） -->
+    <script>
+      (function () {
+        function forceHide() {
+          var l = document.getElementById('loadingScreen');
+          if (l) {
+            l.classList.add('hide');
+            setTimeout(function () { if (l) l.style.display = 'none'; }, 900);
+          }
+        }
+        window.__forceHideLoader = forceHide;
+        setTimeout(forceHide, 3000);
+      })();
+    </script>
+
+    <!-- Three.js 3D粒子背景 -->
+    <canvas id="three-canvas"></canvas>
+
+    <!-- 寻宝地图主场景 -->
+    <div class="app-container" id="appContainer">
+        <!-- 场景切换标签栏 -->
+        <div class="scene-tabs" id="sceneTabs">
+            <button class="scene-tab" onclick="location.href='index.html'">🏠 主页</button>
+            <button class="scene-tab active" data-scene="nature">🌿 自然探索</button>
+            <button class="scene-tab voice-tab" id="btnVoice" onclick="toggleVoicePanel()">🔊 语音</button>
+            <div class="voice-panel" id="voicePanel"></div>
+            <button class="scene-tab rate-tab" id="btnRate" onclick="toggleRatePanel()" title="选择语速（默认 1 倍）">⏩ 1×</button>
+            <div class="rate-panel" id="ratePanel"></div>
+        </div>
+
+        <!-- 标题 -->
+        <div class="title-decoration">✨ 自然元素探索之旅 ✨</div>
+
+        <!-- 角落装饰SVG -->
+        <svg class="corner-deco tl" viewBox="0 0 70 70"><path d="M5,5 L5,55 Q5,65 15,65 L65,65" fill="none" stroke="#ffd54f" stroke-width="3" stroke-linecap="round"/><circle cx="5" cy="5" r="5" fill="#ffd54f"/></svg>
+        <svg class="corner-deco tr" viewBox="0 0 70 70"><path d="M5,5 L5,55 Q5,65 15,65 L65,65" fill="none" stroke="#ffd54f" stroke-width="3" stroke-linecap="round"/><circle cx="5" cy="5" r="5" fill="#ffd54f"/></svg>
+        <svg class="corner-deco bl" viewBox="0 0 70 70"><path d="M5,5 L5,55 Q5,65 15,65 L65,65" fill="none" stroke="#ffd54f" stroke-width="3" stroke-linecap="round"/><circle cx="5" cy="5" r="5" fill="#ffd54f"/></svg>
+        <svg class="corner-deco br" viewBox="0 0 70 70"><path d="M5,5 L5,55 Q5,65 15,65 L65,65" fill="none" stroke="#ffd54f" stroke-width="3" stroke-linecap="round"/><circle cx="5" cy="5" r="5" fill="#ffd54f"/></svg>
+
+        <!-- 背景图 -->
+        <img src="背景1.jpg" class="main-bg" alt="自然元素探索地图" decoding="async">
+
+        <!-- 5×3 热区交互网格 -->
+        <div class="grid-overlay" id="gridOverlay"></div>
+    </div>
+
+    <!-- 知识卡片弹窗（3D翻转） -->
+    <div class="modal-overlay" id="cardModal">
+        <div class="modal-content">
+            <!-- 左侧：动态放大截取大图 + 大字展示 -->
+            <div class="modal-left" id="modalImage">
+                <div class="left-char-display" id="leftCharDisplay">日</div>
+                <!-- 读一读 弹窗：叠加在左侧图片上方（毛玻璃面板，不遮挡图片关键内容） -->
+                <div class="read-popup" id="readPopup">
+                    <div class="read-popup-head">
+                        <span>📖 读一读</span>
+                        <span class="rp-head-btns">
+                            <button class="read-popup-theme" id="readPopupTheme" title="切换配色主题">🎨</button>
+                            <button class="read-popup-close" id="readPopupClose" title="关闭">✖</button>
+                        </span>
+                    </div>
+                    <div class="read-popup-body" id="readPopupBody"></div>
+                </div>
+            </div>
+
+            <!-- 右侧：可翻转教学卡片 -->
+            <div class="modal-right">
+                <div class="close-btn" onclick="event.stopPropagation(); closeModal()">✖</div>
+                <button class="flip-btn" id="flipBtn" onclick="event.stopPropagation(); flipCard()">🔄 翻到背面 ✍️</button>
+
+                <div class="flip-card-inner" id="flipCardInner">
+                    <!-- 正面：基础认读 + 互动学习 -->
+                    <div class="flip-face flip-front">
+                        <!-- 可拖动顶部组：核心字 + 拼音 + 英语单词 + 小喇叭（整体左移） -->
+                        <div class="top-block" id="topBlock">
+                            <div class="core-display"><span class="letter big-char" id="ui-core">日</span></div>
+                            <div class="char-header" id="charHeader">
+                                <div class="py-row">
+                                    <span class="pinyin" id="ui-pinyin">rì</span>
+                                    <button class="spk-btn" id="btnPinyin" title="拼音拼读">🔊</button>
+                                </div>
+                                <div class="en-row">
+                                    <span class="english" id="ui-english">SUN</span>
+                                    <button class="spk-btn" id="btnEnglish" title="英语拼读">🔊</button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- 组词（位于拼音下方） -->
+                        <div class="words" id="ui-words">组词：加载中...</div>
+
+                        <!-- 顶部操作按钮栏（认读 / 学习类） -->
+                        <div class="toolbar">
+                            <button id="btn-audio" class="tb-btn tb-audio">📖 读一读</button>
+                            <button id="btn-quiz" class="tb-btn tb-quiz">🎮 趣味问答</button>
+                        </div>
+
+                        <!-- 拼读高亮展示区（点击拼音/英语小喇叭时显示，浮于卡片右上） -->
+                        <div class="blend-bar" id="blendBar">
+                            <div class="blend-title" id="blendTitle">🔤 拼读练习</div>
+                            <div class="blend-chips" id="blendChips"></div>
+                        </div>
+
+                        <!-- 部首与字形三合一模块（部首 / 笔画 / 结构 融于同一加宽模块） -->
+                        <div class="info-module" id="ui-radical-box">
+                            <div class="module-label">📕 部首与字形</div>
+                            <div class="info-grid">
+                                <div class="info-cell is-radical"><div class="ic-label">部首</div><div class="ic-val struct-radical">日</div></div>
+                                <div class="info-cell"><div class="ic-label">笔画</div><div class="ic-val struct-strokes">4 画</div></div>
+                                <div class="info-cell"><div class="ic-label">结构</div><div class="ic-val struct-type">独体字</div></div>
+                            </div>
+                        </div>
+
+                        <!-- 随机奖励动画容器 -->
+                        <div id="badge-reward">
+                            <div class="badge-icon">🌟</div>
+                            <div class="badge-text">解锁徽章！</div>
+                        </div>
+
+                        <!-- 趣味问答面板（默认隐藏） -->
+                        <div class="quiz-box" id="quizBox">
+                            <div class="quiz-title">🎮 趣味小测验</div>
+                            <div class="quiz-question" id="quizQuestion"></div>
+                            <div class="quiz-options" id="quizOptions"></div>
+                            <div class="quiz-feedback" id="quizFeedback"></div>
+                            <button class="quiz-close" id="quizClose">收起测验</button>
+                        </div>
+                    </div>
+
+                    <!-- 背面：书写练习（田字格 / 笔顺动画 / 描红讲解 / 描红练习 / 笔画名称） -->
+                    <div class="flip-face flip-back">
+                        <h3 class="back-title">✍️ 书写练习</h3>
+
+                        <!-- 书写操作按钮栏 -->
+                        <div class="toolbar">
+                            <button id="btn-animate" class="tb-btn tb-animate">▶ 笔顺动画</button>
+                            <button id="btn-trace-guide" class="tb-btn tb-trace-guide">📝 描红讲解</button>
+                            <button id="btn-trace" class="tb-btn tb-trace">✍️ 描红练习</button>
+                            <button id="btn-reset" class="tb-btn tb-reset">🔄 重置</button>
+                        </div>
+
+                        <!-- 田字格 + 笔画名称（课本式） -->
+                        <div class="write-row">
+                            <!-- 笔画名称：置于田字格左侧，紧贴中线、最窄宽 -->
+                            <div class="strokes-side" id="ui-strokes">
+                                <div class="strokes-label">🖌️ 笔画名称（共 <span class="stroke-num-total">?</span> 笔）</div>
+                                <div class="stroke-list"></div>
+                            </div>
+
+                            <!-- 田字格测验区 -->
+                            <div id="tzg-container" title="点击田字格开启临摹测验">
+                                <div id="tzg-base"></div>
+                                <div id="tzg-trace"></div>
+                                <div id="tzg-status"></div>
+                            </div>
+                        </div>
+
+                        <!-- 操作步骤说明：移至背面最下方 -->
+                        <div class="trace-tip">点「描红练习」直接用蓝笔描红，写错可点「🔄 重置」重新开始～</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+        <!-- 场景配置（供 app.js 读取；壳层注入，避免两页重复大段逻辑） -->
+    <script>window.CURRENT_SCENE = 'nature';</script>
+    <!-- 共享数据与应用逻辑（本地同源，彻底去除 jsdelivr 外链） -->
+    <script src="data.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>
