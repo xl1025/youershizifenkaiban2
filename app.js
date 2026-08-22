@@ -774,13 +774,6 @@
     // ==================== 拼音拼读（声母+韵母+声调，符合课标） ====================
     const ZHYR = ['zhi','chi','shi','ri','zi','ci','si','yi','wu','yu','ye','yue','yuan','yin','yun','ying'];
     const INITIALS = ['zh','ch','sh','b','p','m','f','d','t','n','l','g','k','h','j','q','x','r','z','c','s','y','w'];
-    // 声母呼读音：保证中文 TTS 读成「bo/po/mo…」而非英语字母音「bee/pee…」
-    const INITIAL_READ = {
-        'b':'bo','p':'po','m':'mo','f':'fo','d':'de','t':'te','n':'ne','l':'le',
-        'g':'ge','k':'ke','h':'he','j':'ji','q':'qi','x':'xi',
-        'zh':'zhi','ch':'chi','sh':'shi','r':'ri','z':'zi','c':'ci','s':'si',
-        'y':'yi','w':'wu'
-    };
     // 声母呼读音对应汉字：朗读时不使用拉丁字母（避免被中文TTS读成英语字母音），
     // 而用与呼读音同音的汉字（如 b→玻、x→西），保证语音读成正确音节。
     const INITIAL_CHAR = {
@@ -791,9 +784,9 @@
     };
     // 韵母呼读音对应汉字（j/q/x/y 后的 u 实为 ü，已转换）。用于拼音拼读朗读，避免英文发音。
     const FINAL_CHAR = {
-        'a':'啊','o':'喔','e':'鹅','er':'耳',
+        'a':'啊','o':'喔','e':'鹅','er':'儿',
         'ai':'爱','ei':'诶','ao':'奥','ou':'欧',
-        'an':'安','en':'恩','ang':'昂','eng':'鞥','ong':'轰',
+        'an':'安','en':'恩','ang':'昂','eng':'鞥','ong':'鞥',
         'i':'衣','ia':'呀','ie':'耶','iao':'腰','iu':'忧','ian':'烟','in':'因','iang':'央','ing':'英','iong':'庸',
         'u':'乌','ua':'哇','uo':'窝','uai':'歪','ui':'威','uan':'弯','un':'温','uang':'汪','ueng':'翁',
         'v':'迂','ve':'约','van':'冤','vn':'晕'
@@ -805,44 +798,9 @@
         for (const ini of INITIALS) { if (base.startsWith(ini)) return [ini, base.slice(ini.length)]; }
         return ['', base];
     }
-    // 韵母呼读音（去声调，主元音用大写字母标记，便于后续定位加声调）。
-    // 给 i/u/ü 开头的韵母补 y/w 头，让中文 TTS 读成标准韵母音（如 ing→ying「英」、u→wu「乌」），
-    // 避免直接读裸字母被念成英语字母音（i-n-g）。
-    const FINAL_READ = {
-        'a':'A','o':'O','e':'E','er':'Er',
-        'ai':'Ai','ei':'Ei','ao':'Ao','ou':'Ou',
-        'an':'An','en':'En','ang':'Ang','eng':'Eng','ong':'Ong',
-        'i':'yI','ia':'yA','ie':'yE','iao':'yAo','iu':'yOu','ian':'yAn',
-        'in':'yIn','iang':'yAng','ing':'yIng','iong':'yOng',
-        'u':'wU','ua':'wA','uo':'wO','uai':'wAi','ui':'wEi','uan':'wAn',
-        'un':'wEn','uang':'wAng','ueng':'wEng',
-        'v':'yV','ve':'yuE','van':'yuAn','vn':'yVn'
-    };
-    const TONE_LETTERS = {
-        1:{a:'ā',o:'ō',e:'ē',i:'ī',u:'ū',v:'ǖ'},
-        2:{a:'á',o:'ó',e:'é',i:'í',u:'ú',v:'ǘ'},
-        3:{a:'ǎ',o:'ǒ',e:'ě',i:'ǐ',u:'ǔ',v:'ǚ'},
-        4:{a:'à',o:'ò',e:'è',i:'ì',u:'ù',v:'ǜ'}
-    };
-    // 韵母呼读音：将带调韵母转换为标准中文呼读音（含正确声调标注）
-    function finalCallRead(finToned, ini){
-        let base = stripTone(finToned);
-        // j/q/x/y 后的 u 实为 ü（如 xuě 的韵母 uě → üě）
-        if (['j','q','x','y'].indexOf(ini) >= 0 && base.charAt(0) === 'u') {
-            base = 'v' + base.slice(1);
-        }
-        const tone = getTone(finToned);
-        let call = FINAL_READ[base] || base;
-        if (tone >= 1 && tone <= 4) {
-            const m = call.match(/[A-Z]/);
-            if (m) {
-                const lower = m[0].toLowerCase();
-                const toned = (TONE_LETTERS[tone] || {})[lower] || lower;
-                call = call.replace(m[0], toned);
-            }
-        }
-        return call;
-    }
+    // 注：旧版「大写拉丁韵母读音表（FINAL_READ / finalCallRead）」已移除——其核心用 yI / wU 等大写拉丁，
+    // 在 iOS 上会被念成「Capital Y… / Capital U…」，与「单词字母前多出 Capital」同源；
+    // 现韵母统一改用中文呼读音汉字（见上方 FINAL_CHAR），彻底规避该问题。
 
     // ---------- 语音队列 + 高亮展示（拼音/英语通用） ----------
     // 语言标签归一化：en_US → en-us（各引擎对下划线/连字符支持不一，统一连字符最稳）
@@ -1238,7 +1196,7 @@
         clearLetterHL();
         const word = data.english;
         const letters = word.split('');
-        
+        // 逐字母朗读用【小写】：iOS 英语 TTS 对全大写字母会加读「Capital」前缀音（S→"Capital S"），
         // 小写则读标准字母名（s→"ess"）；界面高亮仍用原大写 letters。
         const reads = letters.map(L => L.toLowerCase()).concat([word.toLowerCase()]);   // 逐字母(小写) + 末句整词
         const spans = wordLetterSpans;
