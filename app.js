@@ -193,13 +193,15 @@
         missing.forEach(u => _deployMissing.add(u));
         if (!_deployMissing.size) return;
         const list = [..._deployMissing];
+        // 给出每个缺失文件的“完整解析 URL”，用户可直接复制到浏览器查看真实 404 响应
+        const urlOf = (u) => { try { return new URL(u, location.href).href; } catch (e) { return u; } };
         el.innerHTML = '<span class="dw-close" title="关闭">×</span>' +
             '<strong>⚠️ 部署缺少资源文件（' + list.length + ' 个）</strong><br>' +
-            '以下文件未能加载（返回 404 或网络不可达）：<br><code>' +
-            list.join('</code><br><code>') + '</code><br>' +
-            '这正导致「田字格不显示 / 讲解和描红无法运行」。请确认：<br>' +
+            '以下文件未加载成功（在浏览器打开下面链接即可看到 404）：<br>' +
+            list.map(u => '<a href="' + urlOf(u) + '" target="_blank" rel="noopener" style="color:#ffd54f;word-break:break-all">' + urlOf(u) + '</a>').join('<br>') +
+            '<br>这正导致「田字格不显示 / 讲解和描红无法运行」。请确认：<br>' +
             '① 这些文件已提交到 GitHub 仓库（与 index.html 同级，位于 <code>libs/</code> 目录）；<br>' +
-            '② 仓库根目录的 <code>.gitignore</code> 没有排除 <code>libs/</code>、<code>*.min.js</code>、<code>*.js</code>（可用 <code>git check-ignore libs/hanzi-data.js</code> 验证）；<br>' +
+            '② 仓库根目录的 <code>.gitignore</code> 没有排除 <code>libs/</code>、<code>*.min.js</code>、<code>*.js</code>（可用 <code>git check-ignore libs/hanzi-data.js</code> 验证，或 <code>git add -f libs/</code> 强制提交）；<br>' +
             '③ 若部署在子目录（如 <code>username.github.io/仓库名/</code>），请保持相对路径（当前已是，无需改）。';
         el.style.display = 'block';
         const closeBtn = el.querySelector('.dw-close');
@@ -210,12 +212,15 @@
         const m = [...new Set(_failedAssets.filter(u => /libs\//.test(u)))];
         return m.length ? m : _CRITICAL_ASSETS.slice(0, 2);
     }
+    // 单文件探测：先 HEAD，非 2xx 或 HEAD 不可用时再 GET 复核；两者都失败才判定缺失。
+    // 原因：个别静态托管（或中间代理）对 HEAD 处理异常，只按 HEAD 判定会误报"缺失"。
+    function checkAsset(u) {
+        return fetch(u, { method: 'HEAD' })
+            .then(r => (r.ok ? null : u), () => null)
+            .then(miss => miss ? fetch(u).then(r => (r.ok ? null : u), () => null) : null);
+    }
     function verifyDeployAssets() {
-        Promise.all(_CRITICAL_ASSETS.map(u =>
-            fetch(u, { method: 'HEAD' })
-                .then(r => r.ok ? null : u)   // 仅在明确非 2xx（如 404）时判定缺失
-                .catch(() => null)            // 网络抖动/拦截不误报，避免正常部署被误判
-        )).then(results => {
+        Promise.all(_CRITICAL_ASSETS.map(checkAsset)).then(results => {
             const missing = results.filter(Boolean);
             if (missing.length) showDeployWarning(missing);
         }).catch(() => { /* 探针本身失败不干扰主功能 */ });
@@ -742,7 +747,7 @@
     let ACTIVITY_TOKEN = 0;   // 活动令牌：用户点击新按钮时自增，正在进行的描红循环据此外退
     async function speakAudio(text) {
         const myToken = ++SPEECH_TOKEN;       // 占用令牌，取消此前所有语音
-        await ensureVoices();                 // 先确认中文语音已加载，避免退回英文默认音
+        await ensureVoices('zh');            // 先确认中文语音已加载，避免退回英文默认音
         const synth = window.speechSynthesis;
         synth.cancel();                       // 先停掉正在播放的语音，避免叠加
         await sleep(90);                      // 取消后稍候再播，规避 Chrome 竞态导致整句不出声
@@ -840,21 +845,46 @@
     }
 
     // ---------- 语音队列 + 高亮展示（拼音/英语通用） ----------
-    // 等待语音列表加载完成：首次 getVoices 可能为空，若直接朗读会退回系统默认（可能为英文）音，导致拼音被读成英文
-    function ensureVoices(){
+    // 语言标签归一化：en_US → en-us（各引擎对下划线/连字符支持不一，统一连字符最稳）
+    function normLang(s){ return String(s || '').toLowerCase().replace(/_/g, '-'); }
+    // 等待语音列表加载完成：首次 getVoices 可能为空，若直接朗读会退回系统默认（可能为英文）音，导致拼音被读成英文。
+    // targetLang：需要等待的目标语言（如 'zh' / 'en'）。iOS Safari 的语音列表是【分批返回】的——
+    // 首次 voiceschanged 往往只有当前系统语言（如中文），英语语音在后续事件才出现；若此刻就去
+    // getVoice('en') 会拿不到英语语音 → 不设 voice → iOS 回退用系统中文语音读英文字母（读出
+    // 「西/鸡/街/达不溜」这类中文腔字母音）。因此这里等待到「目标语言出现」或「多次事件仍无 /
+    // 超时」才返回，兼顾读音正确性与流畅性（真没装英语语音的设备最多多等片刻，按 lang 兜底）。
+    function ensureVoices(targetLang){
         return new Promise((resolve) => {
             const synth = window.speechSynthesis;
-            const v = synth.getVoices();
-            if (v && v.length) { populateVoicePanel(); return resolve(v); }
-            let done = false;
-            const finish = () => { if (done) return; done = true; populateVoicePanel(); resolve(synth.getVoices()); };
+            let done = false, tries = 0, timer = null;
+            const cleanup = () => { if ('onvoiceschanged' in synth) synth.onvoiceschanged = null; clearTimeout(timer); };
+            const finish = (list) => { if (done) return; done = true; cleanup(); populateVoicePanel(); resolve(list || synth.getVoices()); };
+            const check = () => {
+                const list = synth.getVoices() || [];
+                if (!list.length) return false;                                   // 列表还没出来，继续等
+                if (!targetLang) { finish(list); return true; }                   // 无目标语言要求：列表非空即就绪
+                const T = normLang(targetLang);
+                const hit = list.some(v => {
+                    const L = normLang(v.lang);
+                    return L === T || L.startsWith(T + '-');
+                });
+                if (hit) { finish(list); return true; }                           // 目标语言已出现
+                return false;                                                     // 有列表但缺目标语言：等 voiceschanged 再试
+            };
             if ('onvoiceschanged' in synth) {
-                synth.onvoiceschanged = finish;   // 列表就绪后同步刷新语音选择面板
+                synth.onvoiceschanged = () => {  // iOS 会多次触发，每次列表更完整（分批返回）
+                    tries++;
+                    if (done) return;
+                    if (check() || tries >= 4) finish(synth.getVoices());
+                };
             }
-            setTimeout(finish, 1500); // 兜底，避免极端情况下一直挂起
+            timer = setTimeout(() => finish(synth.getVoices()), 2500); // 兜底：目标语言始终未出现（设备未装该语言）则按现状继续
+            check();
         });
     }
-    // 选择中文/英文语音：排除港台繁体，兼容 cmn/Chinese/Mandarin 等标注，优先 zh-CN
+    // 选择中文/英文语音：排除港台繁体，兼容 cmn/Chinese/Mandarin 等标注，优先 zh-CN；
+    // 英语匹配按优先级：精确（en-US/en_US 归一化后相等）→ 美音 en-US → 标准 en-XX → 任意 en 开头，
+    // 避免误选「en-x-自定义」等非标准语音导致读音异常。
     function getVoice(lang){
         const voices = window.speechSynthesis.getVoices() || [];
         if (!voices.length) return null;
@@ -864,8 +894,13 @@
                       || voices.find(v => v.name === userVoicePref.name);
             if (pick) return pick;
         }
-        if (lang && lang.toLowerCase().startsWith('en')) {
-            return voices.find(v => /^en/i.test(v.lang || '')) || null;
+        if (lang && normLang(lang).startsWith('en')) {
+            const T = normLang(lang);
+            return voices.find(v => normLang(v.lang) === T)                      // 1) 精确匹配（en-US / en_US 均可）
+                || voices.find(v => /^en(-|_)us$/i.test(v.lang || ''))           // 2) 美音优先（幼儿英语启蒙多用美音）
+                || voices.find(v => /^en(-|_)[a-z]{2}$/i.test(normLang(v.lang))) // 3) 标准 en-XX（en-GB / en-AU …）
+                || voices.find(v => /^en/i.test(v.lang || ''))                   // 4) 任意 en 开头（含 en-x-*）
+                || null;
         }
         const isZh = (v) => {
             const L = (v.lang || '').toLowerCase();
@@ -987,20 +1022,27 @@
         return new Promise(async (resolve) => {
             const myToken = ++SPEECH_TOKEN;
             const synth = window.speechSynthesis;
-            await ensureVoices();            // 确保中文语音已就绪，避免退回英文默认音
             const isEn = lang && lang.toLowerCase().startsWith('en');
+            // 等待目标语言语音就绪（iOS 语音列表分批返回：英语朗读前必须等到 en 语音出现，
+            // 否则会回退用系统中文语音读英文字母，读音变成中文腔「西/鸡/街」）
+            await ensureVoices(isEn ? 'en' : 'zh');
             const v = getVoice(lang);
+            if (isEn && !v) {
+                // 兜底：设备确实未提供英语语音时保留 lang 交由系统按语言朗读（iOS 内置英语合成仍可正确发音），
+                // 并给出排查提示；绝不回退用中文语音读英文字母。
+                console.warn('未找到英语语音，将按 lang=' + (lang || 'en-US') + ' 由系统默认语音朗读；若读音异常，请在系统设置中启用英语语音。');
+            }
             for (let i = 0; i < items.length; i++) {
                 if (myToken !== SPEECH_TOKEN) { resolve(); return; } // 已被新动作取消
                 if (onStart) onStart(i);
                 await new Promise((res) => {
                     const text = items[i];
                     const u = new SpeechSynthesisUtterance(text);
-                    u.lang = lang || 'zh-CN';
+                    u.lang = v ? normLang(v.lang) : (lang || 'zh-CN');   // 语言标签统一连字符（en_US→en-US），引擎兼容性更好
                     u.rate = userRatePref;
                     u.pitch = isEn ? 1.0 : 1.15;
                     u.volume = 1.0;
-                    if (v) { u.voice = v; u.lang = v.lang; }
+                    if (v) { u.voice = v; }
                     let fin = false; const done = () => { if (fin) return; fin = true; res(); };
                     // onEnd：本句朗读结束后再触发（用于“读完再高亮”，保证高亮时机与读音一致）
                     u.onend = () => { if (onEnd) onEnd(i); done(); };
@@ -1013,7 +1055,8 @@
                     setTimeout(done, est);
                 });
                 if (myToken !== SPEECH_TOKEN) { resolve(); return; }
-                await sleep(180);            // 句间短停顿，确保连贯不抢拍
+                // iOS 上连续单字母/超短句更容易被引擎吞音或抢拍，句间停顿适当加长
+                await sleep((isEn && items[i].length <= 4) ? 260 : 180);
             }
             if (onFinish) onFinish();
             resolve();
