@@ -1055,8 +1055,9 @@
                     setTimeout(done, est);
                 });
                 if (myToken !== SPEECH_TOKEN) { resolve(); return; }
-                // iOS 上连续单字母/超短句更容易被引擎吞音或抢拍，句间停顿适当加长
-                await sleep((isEn && items[i].length <= 4) ? 260 : 180);
+                // 句间停顿仅作缓冲：上一句由 onend 真实播完才进入此处，无需过长。
+                // 英文单字母/超短句 100ms、其余 80ms，语音连贯自然（onend 已防 iOS 吞音/抢拍）。
+                await sleep((isEn && items[i].length <= 4) ? 100 : 80);
             }
             if (onFinish) onFinish();
             resolve();
@@ -1117,8 +1118,9 @@
         ];
         showBlend('🔤 拼音拼读', steps);
         const reads = [];
-        if (ini) reads.push('声母。' + iniChar);
-        reads.push('韵母。' + finChar);
+        // 引导词用逗号断句（中文 TTS 逗号停顿显著短于句号），减少拼读过程的感知停顿
+        if (ini) reads.push('声母，' + iniChar);
+        reads.push('韵母，' + finChar);
         reads.push(toneName);
         reads.push(iniChar + ' 和 ' + finChar + ' 拼成 ' + char + '。');
         await speakQueue(reads, 'zh-CN', (i) => hlBlend(i));
@@ -1133,7 +1135,9 @@
         const steps = letters.map((L, i) => ({ label:'第' + (i+1) + '个字母', val: L }));
         steps.push({ label:'单词', val: word });
         showBlend('🔡 英语拼读', steps);
-        const reads = letters.concat([word.toLowerCase()]);
+        // 逐字母朗读必须用【小写】字母：iOS 英语 TTS 对全大写文本会在每个字母前加读「Capital」
+        //（如 S→"Capital S"），小写字母则直接读标准字母名（s→"ess"），且桌面/安卓同样正确。
+        const reads = letters.map(L => L.toLowerCase()).concat([word.toLowerCase()]);
         await speakQueue(reads, 'en-US', (i) => hlBlend(i));
     }
 
@@ -1197,8 +1201,9 @@
             let fbase = stripTone(fin);
             if (['j','q','x','y'].indexOf(ini) >= 0 && fbase.charAt(0) === 'u') fbase = 'v' + fbase.slice(1);
             const finChar = FINAL_CHAR[fbase] || fin;
-            if (ini) { reads.push('声母。' + iniChar); groupAfter.push(0); }
-            reads.push('韵母。' + finChar); groupAfter.push(1);
+            // 引导词用逗号断句（中文 TTS 逗号停顿显著短于句号），减少拼读过程的感知停顿
+            if (ini) { reads.push('声母，' + iniChar); groupAfter.push(0); }
+            reads.push('韵母，' + finChar); groupAfter.push(1);
             reads.push(toneName); groupAfter.push(null);
             // 保留原有全部语音内容，仅省略声母与韵母之间的「和」字
             reads.push(iniChar + ' ' + finChar + ' 拼成 ' + data.char + '。'); groupAfter.push(null);
@@ -1227,7 +1232,9 @@
         clearLetterHL();
         const word = data.english;
         const letters = word.split('');
-        const reads = letters.concat([word.toLowerCase()]);   // 逐字母 + 末句整词
+        // 逐字母朗读用【小写】：iOS 英语 TTS 对全大写字母会加读「Capital」前缀音（S→"Capital S"），
+        // 小写则读标准字母名（s→"ess"）；界面高亮仍用原大写 letters。
+        const reads = letters.map(L => L.toLowerCase()).concat([word.toLowerCase()]);   // 逐字母(小写) + 末句整词
         const spans = wordLetterSpans;
         // 第 i 个字母开始播放即高亮该字母（与读音同步）；整词读完（onFinish）整体高亮所有字母
         await speakQueue(reads, 'en-US',
