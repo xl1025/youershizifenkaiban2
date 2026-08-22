@@ -1015,7 +1015,8 @@
         if (show) populateRatePanel();
     }
 
-    // 逐条朗读，朗读第 i 条前回调 onStart(i) 用于高亮。
+    // 逐条朗读，第 i 条【真正开始播放】时回调 onStart(i) 用于高亮（onstart 事件驱动，与读音同步，
+    // 不提前：语音引擎从 speak() 调用到出声有延迟，若在 speak 前触发高亮会“先闪后响”）。
     // 采用 SPEECH_TOKEN 令牌：调用即占用新令牌并取消旧语音；旧回调因令牌不符而放弃，
     // 避免不同朗读任务相互打断/叠加。watchdog 估值偏宽松，确保 onend 先触发再结束。
     function speakQueue(items, lang, onStart, onFinish, onEnd){
@@ -1034,7 +1035,6 @@
             }
             for (let i = 0; i < items.length; i++) {
                 if (myToken !== SPEECH_TOKEN) { resolve(); return; } // 已被新动作取消
-                if (onStart) onStart(i);
                 await new Promise((res) => {
                     const text = items[i];
                     const u = new SpeechSynthesisUtterance(text);
@@ -1044,10 +1044,16 @@
                     u.volume = 1.0;
                     if (v) { u.voice = v; }
                     let fin = false; const done = () => { if (fin) return; fin = true; res(); };
+                    // 高亮只由 onstart 事件驱动（声音真正开始播放即高亮，与读音同步）；hlFired 保证幂等。
+                    // 注意：done() 不清除 hlFallback——若引擎异常不触发 onstart，兜底计时器仍需生效。
+                    let hlFired = false;
+                    const hl = () => { if (!hlFired) { hlFired = true; clearTimeout(hlFallback); if (onStart) onStart(i); } };
+                    // 兜底：个别浏览器/语音引擎不触发 onstart 事件时，400ms 后补一次高亮，避免高亮缺失
+                    const hlFallback = setTimeout(hl, 400);
                     // onEnd：本句朗读结束后再触发（用于“读完再高亮”，保证高亮时机与读音一致）
                     u.onend = () => { if (onEnd) onEnd(i); done(); };
                     u.onerror = () => { if (onEnd) onEnd(i); done(); };
-                    u.onstart = () => { if (onStart) onStart(i); };   // 语音真正开始播放即触发高亮（与实际播放同步，消除原 onEnd 滞后）
+                    u.onstart = () => { hl(); };   // 语音真正开始播放即触发高亮（与读音同步，消除提前“先闪后响”）
                     synth.speak(u);
                     // 兜底超时：务必长于真实朗读时长，让 onend 始终先触发再结束，
                     // 防止提前 resolve 导致弹窗提前收起/下一句抢拍（造成播报中断）
