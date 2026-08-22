@@ -1238,7 +1238,7 @@
         clearLetterHL();
         const word = data.english;
         const letters = word.split('');
-        // 逐字母朗读用【小写】：iOS 英语 TTS 对全大写字母会加读「Capital」前缀音（S→"Capital S"），
+        
         // 小写则读标准字母名（s→"ess"）；界面高亮仍用原大写 letters。
         const reads = letters.map(L => L.toLowerCase()).concat([word.toLowerCase()]);   // 逐字母(小写) + 末句整词
         const spans = wordLetterSpans;
